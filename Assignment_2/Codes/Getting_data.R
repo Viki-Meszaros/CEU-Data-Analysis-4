@@ -31,6 +31,33 @@ data_raw <- WDI(indicator=c('NY.GDP.PCAP.PP.KD','SP.POP.TOTL', 'EN.ATM.CO2E.PC')
 
 # Save the raw data file
 my_path <- "c://Users/MViki/Documents/CEU/Winter_semester/DA_4/Assignment_2/Data/"
-write.csv(data_raw, paste0(my_path,'raw/CO2_GDP_raw.csv'))
+write.csv(data_raw, paste0(my_path,'raw/CO2_GDP_raw.csv'), )
+
+
+
+# DATA CLENING ------------------------------------------------------------
+
+# Clear memory
+rm(list=ls())
+
+my_url <- "https://raw.githubusercontent.com/Viki-Meszaros/CEU-Data-analysis-4/main/Assignment_2/Data/raw/CO2_GDP_raw.csv"
+df <- read_csv( my_url )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
