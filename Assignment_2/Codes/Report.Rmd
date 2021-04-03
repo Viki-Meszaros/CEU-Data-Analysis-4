@@ -1,0 +1,140 @@
+---
+title: 'DA4 Assignment: 2: Panel practice'
+subtitle: "CO2 emission and GDP Data"
+author: "Viktória Mészáros"
+date: "03/04/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=F}
+library(tidyverse)
+library(kableExtra)
+```
+
+# Aim of the project
+In thsi project I am going to look at to what extent does economic activity cause CO2 emission. This is an important question as CO2 emission may be the most important channel through which human activity leads to climate change. For the analysis I am going to use data from [The World Bank](https://data.worldbank.org/). I will use GDP: produced goods and services in a country over a year and look if it has an effect on CO2 emmission. I will use a timeframe for the analysis from 1992 till 2018. 
+ 
+
+## Download data and describe it 
+
+To download the data I used the built in R package for this task called "WDI". With this we can easily download data available on the World Bank data site. For this we will need to know the indicator for the measure. In this case I will download 3 variables:
+
+* GDP per capita measures in PPP USD at constant prices (2017) - **NY.GDP.PCAP.PP.KD**
+* CO2 emission per capita measured in metric tons per capita - **EN.ATM.CO2E.PC**
+* population for the countries - **SP.POP.TOTL**
+
+In the data I will have 27 rows for each country for all the years. It will look like this for all the 264 countries. It is nice that I manged to get per capita values both for GDP and CO2 emission as this way it is easy to compare them and I already dealt with the population confounder, that would higly effect both flow variables.
+
+```{r, echo=F, message=F, warning=F}
+# Clear memory
+rm(list=ls())
+
+# Call packages
+#install.packages('WDI')
+library(WDI)
+
+# Search for variables which contains GDP
+a <- WDIsearch('gdp.*capita.*constant') # NY.GDP.PCAP.PP.KD
+b <- WDIsearch('population, total') # SP.POP.TOTL
+c <- WDIsearch("co2") #	EN.ATM.CO2E.PC
+
+
+# Get all the data - 2018 is the latest available data for life expectancy
+data_raw <- WDI(indicator=c('NY.GDP.PCAP.PP.KD','SP.POP.TOTL', 'EN.ATM.CO2E.PC'), 
+                country="all", start=1992, end=2018)
+
+data_raw %>% 
+  head(27) %>% 
+  kbl() %>% 
+  kable_classic(full_width = F, html_font = "Cambria")
+
+
+```
+
+
+## Data cleaning
+
+Currently we downloaded data for all available places at world bank. This does not only contain countries them selves, but also grouped observations such as the Arab World above, Europe or the whole World. I will delete these and only leave countries. After this my raw data contained 215 unique countries with 27 time periods for each.
+
+
+```{r, echo=F, message=F, warning=F}
+# Clear memory
+rm(list=ls())
+
+my_url <- "https://raw.githubusercontent.com/Viki-Meszaros/CEU-Data-analysis-4/main/Assignment_2/Data/raw/CO2_GDP_raw.csv"
+df <- read_csv( my_url)
+
+
+# Filter out grouped observations - most of these have a digit in their name
+df <- df %>% filter( !grepl("[[:digit:]]", df$iso2c) )
+
+
+# drop specific values
+drop_id <- c("EU","HK","OE")
+# Save the opposite
+df <- df %>% filter( !grepl( paste( drop_id , collapse="|"), df$iso2c ) ) 
+
+
+# Get the first letter from iso2c
+fl_iso2c <- substr(df$iso2c, 1, 1)
+retain_id <- c("XK","ZA","ZM","ZW")
+
+# Save observations which are the opposite (use of !)
+df <- df %>% filter( !( grepl( "X", fl_iso2c ) | grepl( "Z", fl_iso2c ) & 
+                          !grepl( paste( retain_id , collapse="|"), df$iso2c ) ) ) 
+
+# Clear non-needed variables
+rm( drop_id, fl_iso2c , retain_id )
+
+
+# We have 27 rows for each country so some data was available for all of them for every year
+# We have 215 countries
+countries <- df %>% 
+  group_by(country) %>% 
+  summarise(count = n())
+
+unique(df$country) %>% 
+  kbl() %>% 
+  kable_classic(full_width = F, html_font = "Cambria")
+
+# Rename columns
+df <- df %>% rename( country = country,
+                       pop=SP.POP.TOTL,
+                       gdp=NY.GDP.PCAP.PP.KD,
+                       co2=EN.ATM.CO2E.PC )
+
+
+
+```
+
+
+## Consider coverage (missing values), drop countries with poor coverage document it 
+We already see some problem in the data. CO2 emission levels are missing for 2017 and 2018 for all countries. I decided to exclude these years, meaning now in the panel we will have data from 1992 until 2016. I also excluded all observations where gdp or co2 emission per capita was missing. And last but not least to get a balanced panel I only kept countires that had data for all years between 1992 and 2016. With this I ended up with 161 countries in total. This is adequate to carry out the analysis.
+
+```{r, echo=F, message=F, warning=F}
+data_panel <- df %>%
+  filter(!(is.na(gdp) | is.na(co2))) %>%
+  group_by(country) %>%
+  mutate(balanced = min(year) == 1992 & max(year) == 2016 & length(unique(year)) == 25) %>%
+  ungroup() 
+
+data_balanced <- data_panel %>%
+  filter(balanced == TRUE)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
