@@ -13,19 +13,29 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r, include=F}
 library(tidyverse)
 library(kableExtra)
+library(modelsummary)
+library(haven)
+library(stargazer)
+library(car)
+library(huxtable)
+library(estimatr)
+library(lmtest)
+library(modelsummary)
+library(fixest)
 ```
 
 # Aim of the project
-In thsi project I am going to look at to what extent does economic activity cause CO2 emission. This is an important question as CO2 emission may be the most important channel through which human activity leads to climate change. For the analysis I am going to use data from [The World Bank](https://data.worldbank.org/). I will use GDP: produced goods and services in a country over a year and look if it has an effect on CO2 emmission. I will use a timeframe for the analysis from 1992 till 2018. 
+In thsi project I am going to look at to what extent does economic activity cause CO2 emission. This is an important question as CO2 emission may be the most important channel through which human activity leads to climate change. For the analysis I am going to use data from the World Development Indicators collected from [The World Bank](https://data.worldbank.org/). I will use GDP: produced goods and services in a country over a year and look if it has an effect on CO2 emmission. I will use a timeframe for the analysis from 1992 till 2018. 
  
 
 ## Download data and describe it 
 
-To download the data I used the built in R package for this task called "WDI". With this we can easily download data available on the World Bank data site. For this we will need to know the indicator for the measure. In this case I will download 3 variables:
+To download the data I used the built in R package for this task called "WDI". With this we can easily download data available on the World Bank data site. For this we will need to know the indicator for the measure. In this case I will download 2 variables:
 
 * GDP per capita measures in PPP USD at constant prices (2017) - **NY.GDP.PCAP.PP.KD**
 * CO2 emission per capita measured in metric tons per capita - **EN.ATM.CO2E.PC**
-* population for the countries - **SP.POP.TOTL**
+
+*The exercise asked to download CO2 emissions and devide by the population of the countries. I checked this and got the exact same numbers as with downloading CO2 emissions per capita directly, so for simplicity, I only download that here.* 
 
 In the data I will have 27 rows for each country for all the years. It will look like this for all the 264 countries. It is nice that I manged to get per capita values both for GDP and CO2 emission as this way it is easy to compare them and I already dealt with the population confounder, that would higly effect both flow variables.
 
@@ -39,12 +49,11 @@ library(WDI)
 
 # Search for variables which contains GDP
 a <- WDIsearch('gdp.*capita.*constant') # NY.GDP.PCAP.PP.KD
-b <- WDIsearch('population, total') # SP.POP.TOTL
 c <- WDIsearch("co2") #	EN.ATM.CO2E.PC
 
 
 # Get all the data - 2018 is the latest available data for life expectancy
-data_raw <- WDI(indicator=c('NY.GDP.PCAP.PP.KD','SP.POP.TOTL', 'EN.ATM.CO2E.PC'), 
+data_raw <- WDI(indicator=c('NY.GDP.PCAP.PP.KD', 'EN.ATM.CO2E.PC'), 
                 country="all", start=1992, end=2018)
 
 data_raw %>% 
@@ -103,7 +112,6 @@ unique(df$country) %>%
 
 # Rename columns
 df <- df %>% rename( country = country,
-                       pop=SP.POP.TOTL,
                        gdp=NY.GDP.PCAP.PP.KD,
                        co2=EN.ATM.CO2E.PC )
 
@@ -113,7 +121,7 @@ df <- df %>% rename( country = country,
 
 
 ## Consider coverage (missing values), drop countries with poor coverage document it 
-We already see some problem in the data. CO2 emission levels are missing for 2017 and 2018 for all countries. I decided to exclude these years, meaning now in the panel we will have data from 1992 until 2016. I also excluded all observations where gdp or co2 emission per capita was missing. And last but not least to get a balanced panel I only kept countires that had data for all years between 1992 and 2016. With this I ended up with 161 countries in total. This is adequate to carry out the analysis.
+We already see some problem in the data. CO2 emission levels are missing for 2017 and 2018 for all countries. I decided to exclude these years, meaning now in the panel we will have data from 1992 until 2016. I also excluded all observations where gdp or co2 emission per capita was missing as I decided to kepp only the countries that had perfect coverage. And last, but not least to get a balanced panel I only kept countries that had data for all years between 1992 and 2016. With this I ended up with 161 countries in total, resulting in a data table with 4025 observations. This is adequate to carry out the analysis.
 
 ```{r, echo=F, message=F, warning=F}
 data_panel <- df %>%
@@ -125,11 +133,236 @@ data_panel <- df %>%
 data_balanced <- data_panel %>%
   filter(balanced == TRUE)
 
+data_balanced$balanced <- NULL
+
 ```
 
 
+## Exploratory data analysis
+
+We see a nice increasing pattern in GDP on average in all the countries throughout our time stamp. CO2 emission also shows and increasing trend, but it starts declining after 2008. We are interested if we can find a causal relationship between economic activity and CO2 emission. 
+
+```{r, echo=F, message=F, warning=F, out.width="50%"}
+data_balanced %>% 
+  group_by(year) %>% 
+  summarise(avg_gdp = mean(gdp, na.rm = T)) %>% 
+ggplot(aes(x = year, y = avg_gdp)) +
+  geom_line(color = "deeppink4") +
+  theme_light() +
+  labs(title="GDP per capita by year", y="GDP (USD)") 
+
+data_balanced %>% 
+  group_by(year) %>% 
+  summarise(avg_emm = mean(co2, na.rm = T)) %>% 
+ggplot(aes(x = year, y = avg_emm)) +
+  geom_line(color = "cyan4") +
+  theme_light() +
+  labs(title="Average CO2 emmision per capita by year", y="CO2 emission (tons)")
 
 
+```
+
+## Feature engineering
+Both of our variables are skewed with a long right tail, so for this it really makes sense to take their log and calculate the models for those values. In this case it also makes sense and with taking the log we will look at percentage changes in GPD and co2 emissions rather than USD changes and tons changes. This makes the analysis easily usable in the future also in case of inflation, or it is not dependent on currency. A 10% increase in GDP can be applied in any country.
+
+```{r, echo=F, message=F, warning=F, out.width="40%", fig.align='center'}
+data_balanced %>% 
+  ggplot(aes(x=gdp)) +
+  geom_histogram(fill="deeppink4")+
+  theme_light() +
+  labs(title="Distribution of GDP", x="GDP")
+
+data_balanced %>% 
+  ggplot(aes(x=co2)) +
+  geom_histogram(fill="cyan4")+
+  theme_light()+
+  labs(title="Distribution of CO2 emissions", x="Co2 emissions")
+
+```
+
+After taking the log of both the distributions look much more similar to a normal distribution. 
+
+```{r, echo=F, message=F, warning=F, out.width="40%", fig.align='center'}
+# CREATE LOG VARIABLES, LAGS AND LEADS
+data_balanced <- data_balanced %>%
+  arrange(country, year) %>%
+  group_by(country) %>%
+  mutate(
+    lnco2=log(co2),
+    lngdp=log(gdp),
+    d_lnco2= lnco2- lag(lnco2),
+    d_lngdp= lngdp- lag(lngdp),
+    year = factor(year)
+  ) %>%
+  ungroup()
+
+data_balanced %>% 
+  ggplot(aes(x=lngdp)) +
+  geom_histogram(fill="deeppink4")+
+  theme_light()+
+  labs(title="Distribution of log(GDP)", x="log(GDP)")
+
+data_balanced %>% 
+  ggplot(aes(x=lnco2)) +
+  geom_histogram(fill="cyan4")+
+  theme_light()+
+  labs(title="Distribution of log(CO2 emission)", x="log(CO2 emission)")
+
+```
+
+When looking at the time trend of the logs of the variables we realize the two grahps look almost identical. This also points that we should check if their is an effect of economic activity on CO2 emissions.  
+
+```{r, echo=F, message=F, warning=F, out.width="40%", fig.align='center'}
+data_balanced %>% 
+  group_by(year) %>% 
+  summarise(avg_gdp = mean(lngdp, na.rm = T)) %>% 
+ggplot(aes(x = year, y = avg_gdp)) +
+  geom_point(color = "deeppink4") +
+  theme_light() +
+  labs(title="GDP per capita by year", y="GDP (USD)") 
+
+
+data_balanced %>% 
+  group_by(year) %>% 
+  summarise(avg_emm = mean(lnco2, na.rm = T)) %>% 
+ggplot(aes(x = year, y = avg_emm)) +
+  geom_point(color = "cyan4") +
+  theme_light() +
+  labs(title="Average CO2 emmision per capita by year", y="CO2 emission (tons)")
+```
+
+
+## Estimate and discuss coefficients for each model 
+In the following section I am going to build 7 models to analyze log changes of the variables in different countries.
+
+#### Cross-section OLS for 2000 and Cross-section OLS for a year of your choice (2015)
+First of all I created two basic cross-section OLS models one for 2000 and one for 2015. The outcome variable was ln CO2 emission per capita, and the feature variable was ln GDP per capita. For 2000 we can interpret the coefficients of the model as: on average if GPD per capita is 1% higher we expect the CO2 emission to be 1.23% higher. The interpretation is the same for 2015, there in case GDP per capita is 1% higher we expect CO2 emission to be 1.13% higher.
+
+
+```{r, echo=F, message=F, warning=F}
+d1 <- data_balanced[data_balanced$year==2000,]
+reg1 <- lm(lnco2 ~ lngdp, data = d1)
+
+
+d2 <- data_balanced[data_balanced$year==2015,]
+reg2 <- lm(lnco2 ~ lngdp, data = d2)
+
+huxreg("Cross-sec 2000"=reg1, "Cross_sec 2015" =reg2, 
+  statistics = c(N = "nobs", R2 = "r.squared"), 
+  coefs = c("ln GDP per capita"= "lngdp" ))
+
+
+```
+
+#### First difference models
+After the OLS models I built 3 first difference models, one woth no lags, one with 2 lags and one with 6 lags. For all of them the outcome variable was the first difference in ln CO2 emission. The right hand side variable is the first difference in ln GSP per capita for the first model, and I added 2 than 6 lags for the two other models. I included yearly dummies in all of them to take care of aggregate trends that are non linear.
+
+Focusing on the coefficient of our interest (for gdp per capita variables). 
+
+1. In the simple FD model the coefficient shows that CO2 emission per capita tends to increase by 0.68% more when GDP per capita increases by 1% more.
+
+2. In the model with 2 lags the coefficient can be interpreted that CO2 emission per capita tends to increase by 0.66% more when GDP per capita increases by 1% more. (the cummulative timr trend is 0.072, so the cummulative lagged effect of two years GPD change is 0.072% additional change in CO2 emission per capita )
+
+3.  In the model with 6 lags the coefficient means that CO2 emission per capita tends to increase by 0.58 percentage points more when GDP per capita increases by 1 percentage points more. 
+
+We can see that the coefficient is significant at 99%, and including lags does not change the immideate effect significantly.
+
+
+
+```{r, echo=F, message=F, warning=F}
+reg3 <- lm_robust(d_lnco2 ~ d_lngdp + year,
+                   data = data_balanced, 
+                   se_type = "stata", 
+                   clusters = country)
+
+
+```
+```{r, echo=F, message=F, warning=F}
+lags_2 <- paste(paste0("lag(d_lngdp,", c(0:2), ")"), collapse = " + ")
+
+reg4_formula <- as.formula(paste0("d_lnco2 ~ ", lags_2, "+ year"))
+
+reg4 <- lm_robust(reg4_formula,
+                     data = data_balanced, 
+                     se_type = "stata", 
+                     clusters = country
+)
+
+
+```
+```{r, echo=F, message=F, warning=F}
+lags_6 <- paste(paste0("lag(d_lngdp,", c(0:6), ")"), collapse = " + ")
+
+reg5_formula <- as.formula(paste0("d_lnco2 ~ ", lags_6, "+ year"))
+
+reg5 <- lm_robust(reg5_formula,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  clusters = country
+)
+
+huxreg("FD, no lags"=reg3, "FD, 2 lags"=reg4, "FD, 6 lags"=reg5,
+  statistics = c(N = "nobs", R2 = "r.squared"), 
+  coefs = c("d(ln GDP per capita)" = "d_lngdp",
+            "d(ln GDP per capita)"="lag(d_lngdp, 0)",
+            "d_lngdp lag1"="lag(d_lngdp, 1)",
+            "d_lngdp lag2"="lag(d_lngdp, 2)",
+            "d_lngdp lag3"="lag(d_lngdp, 3)",
+            "d_lngdp lag4"="lag(d_lngdp, 4)",
+            "d_lngdp lag5"="lag(d_lngdp, 5)",
+            "d_lngdp lag6"="lag(d_lngdp, 6)",
+            "Constant"= "(Intercept)" ))
+```
+
+
+#### Fixed effects model with time and country fixed effects
+
+The coefficient of the fixed-effect model means that when GDP per capita is 1% higher that its average value in a country, CO2 emission per capita tends to be 0.76% higher than its average within that country.
+
+
+```{r, echo=F, message=F, warning=F}
+reg6 <- lm_robust(lnco2 ~ lngdp + year,
+                    data = data_balanced, 
+                    se_type = "stata", 
+                    fixed_effect =  ~ country,
+                    clusters = country)
+
+huxreg("FE"=reg6, 
+  statistics = c(N = "nobs", within_R2 = "adj.r.squared"), 
+  coefs = c("ln GDP per capita"= "lngdp" ))
+
+```
+
+#### Long difference model 
+The last model I looked at was a long difference model, in which I took the difference in ln GPD per capita and ln CO2 emission per capita between 1992 and 2016, assuming I only have data from these two years. The coefficient in this case means that on a long term we expect CO2 emission per capita to increase by 0.74% more when GDP per capita increases by 1% more.
+
+```{r, echo=F, message=F, warning=F}
+d7 <- data_balanced[data_balanced$year %in% c(2000,2016),]
+d7 <- d7 %>% 
+  group_by(country) %>% 
+  mutate(ld_lngdp = lngdp-lag(lngdp),
+         ld_lnco2 = lnco2 - lag(lnco2)) %>% 
+  ungroup()
+
+
+reg7 <- lm(ld_lnco2 ~ ld_lngdp, data = d7)
+
+huxreg("LD"=reg7, 
+  statistics = c(N = "nobs", R2 = "r.squared"), 
+  coefs = c("LD ln GDP per capita"= "ld_lngdp",
+            "Intercept" = "(Intercept)"))
+```
+
+## Summarize your finding in a paragraph 
+After building and analyzing several models with the aim to find the extent to which economic activity cuses CO2 emission we saw that with a 99% confidence interval in case of all panel data models we can say that the change in GDP per capita effects the change of CO2 emission. A raugh average would be to say that in case of an additional 1% change in GPD per capita we can expect CO2 emission to increase with 0.7% more. To claim causality this is not enough, we would need to think of this problems in more details.
+
+
+## Discuss potential mechanisms 
+To claim causality we would need to find an exact mechanisim through which one variable effects the other. In this case GDP per capita (which is the goods ans and services produced in country over a year per capita) can effect CO2 emission as if more goonds are produced, more actories are needed and those create more CO2. More services on the other hand can lead to more travelling, more electricity needed, etc. which all can lead to more CO2 emission.
+
+## Think of a potential confounder
+Also a really important thing before claming causality is to think about potential confounders that if you leave out would lead to biased results. In this case I would think of environment protective measures as a confounder. It was clearly visible on the CO2 emission by year graph that CO2 emission started to shrink after 2008. This can be due to that countries and people get more environmental friendly, and thus aim to reduce CO2 emissions.
+Technological development can be another, as newer cleaner technologies are becoming available every year. So technological advancements can effect CO2 emissions highly, while it also effect GDP but probably the different direction.  
 
 
 
