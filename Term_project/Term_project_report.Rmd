@@ -1,0 +1,15 @@
+---
+title: "Analysis of Life expectancy and GDP per capita"
+author: "Viktória Mészáros"
+date: "11/04/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## Data
+
