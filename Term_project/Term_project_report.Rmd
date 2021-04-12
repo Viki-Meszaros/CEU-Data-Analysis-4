@@ -9,7 +9,303 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-
+## Question
+The question for this analysis will be **Is there a causal effect between average income per capita and life expectancy?**. To measure average income in a given country I used GDP per capita at PPP Purchasing Power Parity (constant 2017 international $). PPP takes into account the relative cost of living in the given country and therefore it provides a more accurate picture of the real differences in income. This an an important questions as it means that if we are born in a country where GDP is higher we can expect to live longer than those who are born in countries with lower GDP per capita. In this analysis we use GDP per capita as an indicator of wealth. The mechanism behind this causal effect can be that higher wealth in a given country can lead to higher purchasing power. This can enable people in that country to afford better housing, more healthy food or even spend more on their health in other means for example on sports or even dietary guidance from professionals. These better conditions of life can lead to a higher life expectancy. Higher GDP per capita can also mean financial stability and if we go back to Maslow's piramid of needs people only start to think about living a healtier life and invest in such a thing if their basic needs are fulfilled, so after financial stabiloty is reached for higher percent of the population can lead to more people to aim living a healtier live.  We are after the effect of individual wealth in this project, so we are not interested in what happens if the country's government use the wealth of the country to invest more in health care or better schooling (educate people to live healthier lives), but rather we want to see that higher income on a per capita lever (measured with GDP per capita) leads to higher life expectancy. 
 
 ## Data
+The data I was using was coming from 3 sources. Frist of all the [World Bank Data](https://www.worldbank.org/en/home). I collected GDP per capita, population, life expectancy and healthcare expenditure values via an API from the World Bank Data Indicators. You can find the codes for the download in my GitHub repo, under [Term_project.R](https://github.com/Viki-Meszaros/CEU-Data-analysis-4/blob/main/Term_project/Term_project.R) file. I also collected data from the [Human Development Reports](http://www.hdr.undp.org/en) about expected years of schooling at birth for all the countries. The third source was UCDP (Uppsala Conflict Data Program) from where I got data about armed conflicts from 1946-2019 (UCDP/PRIO Armed Conflict Dataset version 20.1).
+
+```{r, include=F}
+library(tidyverse)
+library(modelsummary)
+library(haven)
+library(stargazer)
+library(car)
+library(huxtable)
+library(estimatr)
+library(lmtest)
+library(modelsummary)
+library(fixest)
+library(data.table)
+library(kableExtra)
+
+df <- read.csv("https://raw.githubusercontent.com/Viki-Meszaros/CEU-Data-analysis-4/main/Term_project/Data/clean/LifeExp_GDP_clean.csv")
+```
+
+#### Sample 
+After some transformations and cleaning I ended up with a balanced panel data containing 176 countries with data from 2000 to 2018 (19 years time series), overall I had 3344 observations in the data set (19x176). I decided to only include countries in my analysis where I had data for all years, so to get a balanced panel. With this I still had 176 countries which is a good number for this type of analysis. Mainly the excluded countries were really small or for some extraordinary reasons (war, political situations) data was not available for them, due to this the exclusion of them would not change the conclusions of the analysis. The analysis is focusing on a personal level life expectancy, so I used GDP per capita and health care expenditures per capita in the models. Here are all the variables I used in the project.
+
+*Variables:*
+* outcome variable: **Life expectancy**
+* causal variable: **GDP per capita**
+* confounders: **population**, **health care expenditure per capita**, **number of wars in a given country**, **expected years of schooling at birth**
+
+```{r, include=F}
+data_panel <- df %>%
+  filter(!(is.na(gdp) | is.na(life_exp))) %>%
+  group_by(country) %>%
+  mutate(balanced = min(year) == 2000 & max(year) == 2018& length(unique(year)) == 19) %>%
+  ungroup() 
+
+data_balanced <- data_panel %>%
+  filter(balanced == TRUE)
+
+# We ended up by 176 countries in the balanced data
+unique(data_balanced$country)
+```
+
+Before looking at modelling lets do a thought experiment. In this situation it would be impossible and not practical to do an experiment but we can still design one to understand it better. I would need to design an experiment where the subjects would be people. The outcome would be life expectancy and the causal variable would be GDP per capita, average purchasing power. I would need people from different counrties and cultures, to get a robust generalizable results. I would need to divide them to groups and change their income. For example I could have 3 groups for simplicity. Increase the incomes in one group, decrease in another and keep the same in the third one. Then I would need to to measure if these changes have an effect on life expectancy. I wold need to run the experiment on a really long time period to get actual affect not just a biased results driven by the change in the income people were used to. This experiment would also raise some ethical and legal issues by setting incomes for people. On the other hand we already see some difficulties in random assignment in the observational data. Country specific habits, customs, or other cultural differences can have an effect both on income and life expectancy. For this I will need to control for country specific trends in my model as they are endogenous sources of variation. There are several issues with endogenous variation. I want to measure the effect of higher GDP per capita on life expectancy, so I have to make sure only GDP per capita is effecting life expectancy, so I have to control for potential confounders. Most of the endogenous sources of variation I could though of is due to geographical location of people. For example health expenditure of the country they are living in, or schooling they get as more highly educated people tend to earn more but also deal more with their health. I also got data about wars in the countries as it can have significant effect on both variables making it a common cause confounder.  
+
+
+## Exploratory data analysis
+
+```{r, echo=F, message=F, warning=F, fig.align='center'}
+
+df[,c("life_exp", "gdp", "health_exp","pop", "exp_schooling") ] %>%
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales = "free") +
+  geom_histogram(fill= "cyan4", color="white")+
+  theme_light()
+
+
+```
+
+I had a look at the distribution of my variables. You can see that GDP per capita (marked as gdp), health care expenditures (healt_exp) and population (pop) are skewed with a long right tail. I took the log of them to transform them to a more closer to normal distribution. I left life expectancy and axpected years of schooling as they are. It was also a good idea to take the log of gdp, health care expenditure and population as now we are looking at percentage changes of them instead of level changes which make results more robust over time and currencies.
+
+
+```{r, echo=F, message=F, warning=F, fig.align='center'}
+df[,c("gdp", "health_exp","pop") ] %>%
+  gather() %>% 
+  ggplot(aes(log(value))) +
+  facet_wrap(~key, scales = "free") +
+  geom_histogram(fill= "deeppink4", color="white")+
+  theme_light()
+
+```
+
+The overall average trend in life expectancy and GDP look really really similar throughout the years. There is only one difference in 2008 where due to the global financial crises GDP per capita dropped a bit, but it has no impact on life expectancy. 
+
+
+```{r, echo=F, message=F, warning=F, out.width="50%"}
+df %>% 
+  group_by(year) %>% 
+  summarise(avg_emm = mean(life_exp, na.rm = T)) %>% 
+  ggplot(aes(x = year, y = avg_emm)) +
+  geom_line(color = "cyan4") +
+  theme_light() +
+  labs(title="Average life expectency by year", y="Life expectency")
+
+df %>% 
+  group_by(year) %>% 
+  summarise(avg_gdp = mean(log(gdp), na.rm = T)) %>% 
+  ggplot(aes(x = year, y = avg_gdp)) +
+  geom_line(color = "deeppink4") +
+  theme_light() +
+  labs(title="GDP per capita by year", y="GDP (USD)") 
+```
+
+#### Feature engineering
+So as you can see from the distribution I decided to use ln GDP per capita. ln population and ln health care expenditure in my analysis. It is also important to note that instead of GDP per countries and health care expenditure for each country I used the weighed values of these by population. This is important as life expectancy is effecting people and thus I wanted to have the income per person and health care expenditure in the models as well.
+
+
+```{r, echo=F, message=F, warning=F}
+data_balanced <- data_balanced %>%
+  arrange(country, year) %>%
+  group_by(country) %>%
+  mutate(
+    lnpop=log(pop),
+    lngdp=log(gdp),
+    lnhealth_exp= log(health_exp),
+    year = factor(year),
+    c = factor(country)
+  ) %>%
+  ungroup()
+```
+
+## Identification strategy
+To find the association between my variables I decided to use a Fixed Effects regression. This is really good in uncovering long-run association, which I wanted to do in this case. I was not highly interested in the time path of the effect but rather the overall, general trend. 
+I started the analysis by building one simple OLS model for each year, to see how much the patterns change. I all of the years the coefficient for GDP per capita is very similar meaning that for a 10% higher GDP per capita  we would expect 0.6 years higher life expectancy. The coefficient seems to shrink as time passes. This can be due to the slowing down of the increase in life expectancy. It cannot increase in a steady linear pattern, and once it will reach a maximum value and even if technology advances and healtcare improves they won't be able to make people live longer and longer each year.
+
+```{r, echo=F, message=F, warning=F}
+#### look at all possible years
+models <- NULL
+years <- 2000:2018
+i <- 1
+
+for (i in seq_along(years)) {
+  data <- data_balanced[data_balanced$year==years[i],]
+  models[[i]] <- lm(life_exp ~ lngdp, data = data)
+  
+}
+
+summary_1 <- data.frame() 
+
+for (i in 1:19) {
+    summary_1 <- rbind(summary_1, c(round(1999+i), models[[i]]$coefficients[1], models[[i]]$coefficients[2]))
+  }
+
+names(summary_1) <- c("Year", "Intercept","Coefficient for GDP")
+  
+summary_1 %>% 
+  kbl() %>% 
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+I built 7 FE models. The first only contained the outcome and the causal variable. In the second I included average nonlinear aggregate trends by including time dummies. In the 3rd model I included country specific linear trends with the inclusion of country dummies, but it did not change anything, so I do not included this regression in the table below. From the 4th model on I started adding confounders to the models. The 4th contains log population, the 5th also has log health care expenditures per capita 
+
+```{r, echo=F, message=F, warning=F}
+## 1. First difference model, with time trend, no lags
+reg1 <- lm_robust(life_exp ~ lngdp,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  clusters = country)
+
+
+## 2. Fixed effects model with time fixed effects
+reg2 <- lm_robust(life_exp ~ lngdp + year,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+
+## 3. Fixed effects model with time and country fixed effects 
+reg3 <- lm_robust(life_exp ~ lngdp + year + c,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+
+## 4. Fixed effects model with time and country fixed effects 
+reg4 <- lm_robust(life_exp ~ lngdp + year + lnpop,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+
+## 5. Fixed effects model with time and country fixed effects 
+reg5 <- lm_robust(life_exp ~ lngdp + year + lnpop + lnhealth_exp,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+
+## 6. Fixed effects model with time and country fixed effects 
+reg6 <- lm_robust(life_exp ~ lngdp + year + lnpop + lnhealth_exp + num_wars,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+
+## 7. Fixed effects model with time and country fixed effects 
+reg7 <- lm_robust(life_exp ~ lngdp + year + lnpop + lnhealth_exp + num_wars + exp_schooling,
+                  data = data_balanced, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+
+summary <- huxreg( "Simple FE" = reg1, "FE / time trend" = reg2, "FE / population confounder" = reg4, "FE / pop & healt exp" = reg5, "FE / pop, health exp & war" = reg6, "FE / pop, health exp, war & schooling" = reg7,
+       statistics = c(N = "nobs", R2 = "r.squared"),
+       coefs = c("ln (GDP per capita)" = "lngdp",
+                 "ln(population)" = "lnpop",
+                 "ln(health expenditure)" = "lnhealth_exp",
+                 "Number of wars" = "num_wars",
+                 "Expected schooling (years)" = "exp_schooling",
+                 "Constant"= "(Intercept)" ))
+
+summary %>% 
+  insert_row(c("Year dummies", "No", "Yes", "Yes", "Yes", "Yes", "Yes"), after = 13) 
+
+
+```
+
+The main model I made has a really similar coefficient as the OLS models above. In case of a 10% higher GDP we expect people to live 0.6 years longer. When I included time dummies this the coefficient shrinks and it shows that in case of a 10% higher GDP we expect a 0.1 years higher life expectancy. When adding confounders population, health expectancy and war, the coefficient increases to between 2.5 and 2.6 meaning that we can expect 0.25 year higher life expectancy in countries with 10% higher GDP. The 6th model with population health care expenditure and war has a coefficient of 2.688 with a 95% CI [1.048, 4.328]. In the last model wilt all the confounders the coefficient is 2.225 with a 95% CI of [0.359, 4.091] meaning that we expect life expectancy at birth to be 0.03 to 0.41 years higher in case the GDP is 10% higher. This is not a big difference, but still it is statistically significant result! After looking at the models I think the last model is maybe unnecessary conditioning on schooling years. It can have some indirect impact on life expectancy but this has stronger correlation with GDP per capita and it is probably an exogenous source of variation and in this case we should not controll for it as we need this kind of variation in our models.
+
+
+## Limitations
+The limitations of a causal analysis using observational data is always the omitted variable bias. There may be other confounders that we did not take into consideration and thus can change the outcome. We can never be in ceteris paribus where we condition on all relevant variables.  One limitation I would like to mention in my analysis is the war data I collected. It only stated the number of wars in a given country for a given year. It is not the best as I would rather look at the scale of war, for example with mortality rates or something like that. 
+I think overall I made good effort in this analysis to condition on the variables I thought are endogenous sources of variation to get as close to causality as possible.
+
+## Robustness
+I think the model I estimated is quite robust. With the fixed effect model I managed to estimate the long run effect of GDP on life expectancy. For the analysis I used a pretty big panel with 176 countries in it through out 19 years time spam. Throughout this we see a statistically significant relationship between our causal and outcome variables. I took care of average non-linear aggregate trends and looked at country specific linear trends as well last but not least included some confounders to control for other endogenous sources of variation. 
+
+
+## Heterogeneity
+To consider the heterogeneity of my model I created two groups of countries. Small and big ones. Bi ones were where at least in one year the population was above 10 million. There where 81 big countries and 95 small ones. I calculated the same FE regression model for them with including health care expenditures per capita and number of wars in the country as confounders. I excluded population as I made the grouping based on that. The coefficient increased for big countries but decreased for small ones. Also the model shows no statistically significant evidenve that GDP has an effect on life expectancy in small countries. In the other hand the results remained significant for big countries. This interesting finding would need more analysis why this happens for small countries. Probably GDP and life expectancy is changing differently there, tha is big counties.
+
+```{r, echo=F, message=F, warning=F}
+
+tdf <- data_balanced %>% 
+  filter(pop>10000000)
+
+big <- unique(tdf$country)
+
+big_df <- data_balanced %>% 
+  filter(country %in% big)
+
+small_df <- data_balanced %>% 
+  filter(!(country %in% big))
+
+
+regbig <- lm_robust(life_exp ~ lngdp + year  + lnhealth_exp + num_wars,
+                  data = big_df, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+regsmall <- lm_robust(life_exp ~ lngdp + year + lnhealth_exp + num_wars,
+                  data = small_df, 
+                  se_type = "stata", 
+                  fixed_effect =  ~ country,
+                  clusters = country)
+
+summary <- huxreg( "Big countries" = regbig, "Small countries" = regsmall, "FE / pop, health exp & war" = reg6, 
+       statistics = c(N = "nobs", R2 = "r.squared"),
+       coefs = c("ln (GDP per capita)" = "lngdp",
+                 "ln(population)" = "lnpop",
+                 "ln(health expenditure)" = "lnhealth_exp",
+                 "Number of wars" = "num_wars" ))
+
+summary 
+
+```
+
+
+
+
+## Summary
+During my analysis I made some effort to find a causal effect between income levels of people (purchasing power) and life expectancy and managed to find statistically significant evidence that with higher GDP per capita we can expect higher life expectancy in big countries. This means that if big countries (with population above 10 million) want to increase the life expectancy of their people should try to increase avergae incomes. An application can also be to increase minimum income in countires, mainly focusing on increasing purchasing power. On the other hand for smaller countries there is no evidence that there is a connection between GDP per capirta and life expectancy.
+
+
+
+
+
+
+
+
+
+
+
+
+#### Resources
+
+**UCDP/PRIO Armed Conflict Dataset version 20.1**
+* Pettersson, Therese & Magnus Öberg (2020) Organized violence, 1989-2019. Journal of Peace Research 57(4).
+* Gleditsch, Nils Petter, Peter Wallensteen, Mikael Eriksson, Margareta Sollenberg, and Håvard Strand (2002) Armed Conflict 1946-2001: A New Dataset. Journal of Peace Research 39(5).
+
+**Expected years of schooling (years) dataset**
+* UNESCO Institute for Statistics (2020), ICF Macro Demographic and Health Surveys, UNICEF Multiple Indicator Cluster Surveys and OECD (2019b).
+
+
+
+
+
+
+
 
